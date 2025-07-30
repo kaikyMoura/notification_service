@@ -1,10 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { CreateNotificationDto } from 'src/application/dtos/create-notification.dto';
-import { WelcomeEmailUseCase } from 'src/application/use-cases/welcome-email.use-case';
 import { NotificationChannelEnum } from 'src/domain/enums/notification-chanel.enum';
 import { NotificationTypeEnum } from 'src/domain/enums/notification-type.enum';
 import { NotificationValidationException } from 'src/domain/exceptions/notification.exceptions';
+import { LOGGER_SERVICE } from 'src/infrastructure/logger/logger.constants';
 import { ILoggerService } from 'src/infrastructure/logger/interfaces/logger.service.interface';
 import { SendgridNotifier } from '../../notifiers/sendigrid.notifier';
 import { TwilioNotifier } from '../../notifiers/twilio.notifier';
@@ -15,7 +15,6 @@ describe('NotificationService', () => {
   let service: NotificationService;
   let sendgridNotifier: jest.Mocked<SendgridNotifier>;
   let twilioNotifier: jest.Mocked<TwilioNotifier>;
-  let welcomeEmailUseCase: jest.Mocked<WelcomeEmailUseCase>;
   let eventEmitter: jest.Mocked<NotificationEventEmitterService>;
   let logger: jest.Mocked<ILoggerService>;
 
@@ -36,19 +35,17 @@ describe('NotificationService', () => {
 
     const mockTwilioNotifier = {
       send: jest.fn(),
-    };
-
-    const mockWelcomeEmailUseCase = {
-      execute: jest.fn(),
+      sendVerificationCode: jest.fn(),
+      checkVerificationCode: jest.fn(),
     };
 
     const mockEventEmitter = {
       emitNotificationQueued: jest.fn(),
       emitNotificationSent: jest.fn(),
       emitNotificationFailed: jest.fn(),
-      emitWelcomeEmailSent: jest.fn(),
       emitVerificationCodeSent: jest.fn(),
       emitVerificationCodeVerified: jest.fn(),
+      emitWelcomeEmailSent: jest.fn(),
     };
 
     const mockLogger = {
@@ -70,15 +67,11 @@ describe('NotificationService', () => {
           useValue: mockTwilioNotifier,
         },
         {
-          provide: WelcomeEmailUseCase,
-          useValue: mockWelcomeEmailUseCase,
-        },
-        {
           provide: NotificationEventEmitterService,
           useValue: mockEventEmitter,
         },
         {
-          provide: 'LOGGER_SERVICE',
+          provide: LOGGER_SERVICE,
           useValue: mockLogger,
         },
       ],
@@ -87,9 +80,8 @@ describe('NotificationService', () => {
     service = module.get<NotificationService>(NotificationService);
     sendgridNotifier = module.get(SendgridNotifier);
     twilioNotifier = module.get(TwilioNotifier);
-    welcomeEmailUseCase = module.get(WelcomeEmailUseCase);
     eventEmitter = module.get(NotificationEventEmitterService);
-    logger = module.get('LOGGER_SERVICE');
+    logger = module.get(LOGGER_SERVICE);
   });
 
   afterEach(() => {
@@ -108,8 +100,17 @@ describe('NotificationService', () => {
       // Assert
       expect(sendgridNotifier.send).toHaveBeenCalledWith(emailDto);
       expect(eventEmitter.emitNotificationQueued).toHaveBeenCalled();
-      expect(eventEmitter.emitNotificationSent).toHaveBeenCalledWith(emailDto);
-      expect(eventEmitter.emitNotificationFailed).not.toHaveBeenCalledWith(emailDto);
+      expect(eventEmitter.emitNotificationSent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: emailDto.userId,
+          channel: emailDto.channel,
+          type: emailDto.type,
+          email: emailDto.email,
+          title: emailDto.title,
+          message: emailDto.message,
+        }),
+      );
+      expect(eventEmitter.emitNotificationFailed).not.toHaveBeenCalled();
     });
 
     it('should send SMS notification successfully', async () => {
@@ -123,7 +124,16 @@ describe('NotificationService', () => {
       // Assert
       expect(twilioNotifier.send).toHaveBeenCalledWith(smsDto);
       expect(eventEmitter.emitNotificationQueued).toHaveBeenCalled();
-      expect(eventEmitter.emitNotificationSent).toHaveBeenCalled();
+      expect(eventEmitter.emitNotificationSent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: smsDto.userId,
+          channel: smsDto.channel,
+          type: smsDto.type,
+          phone: smsDto.phone,
+          title: smsDto.title,
+          message: smsDto.message,
+        }),
+      );
     });
 
     it('should throw NotificationValidationException for missing userId', async () => {
@@ -213,23 +223,31 @@ describe('NotificationService', () => {
   describe('sendWelcomeEmail', () => {
     it('should send welcome email successfully', async () => {
       // Arrange
-      welcomeEmailUseCase.execute.mockResolvedValue(undefined);
+      const emailDto = { ...mockCreateNotificationDto, channel: NotificationChannelEnum.EMAIL };
+      sendgridNotifier.send.mockResolvedValue(undefined);
 
       // Act
-      await service.sendWelcomeEmail(mockCreateNotificationDto);
+      await service.sendWelcomeEmail(emailDto);
 
       // Assert
-      expect(welcomeEmailUseCase.execute).toHaveBeenCalledWith(mockCreateNotificationDto);
-      expect(eventEmitter.emitWelcomeEmailSent).toHaveBeenCalled();
-    });
-
-    it('should handle welcome email errors', async () => {
-      // Arrange
-      const error = new Error('Welcome email error');
-      welcomeEmailUseCase.execute.mockRejectedValue(error);
-
-      // Act & Assert
-      await expect(service.sendWelcomeEmail(mockCreateNotificationDto)).rejects.toThrow();
+      expect(sendgridNotifier.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: emailDto.userId,
+          email: emailDto.email,
+          title: 'Welcome to our platform',
+          type: NotificationTypeEnum.SUCCESS,
+          channel: NotificationChannelEnum.EMAIL,
+          message: expect.stringContaining('Welcome'),
+        }),
+      );
+      expect(eventEmitter.emitNotificationQueued).toHaveBeenCalled();
+      expect(eventEmitter.emitWelcomeEmailSent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: emailDto.userId,
+          email: emailDto.email,
+        }),
+      );
+      expect(eventEmitter.emitNotificationFailed).not.toHaveBeenCalled();
     });
   });
 
@@ -237,29 +255,32 @@ describe('NotificationService', () => {
     it('should send verification code successfully', async () => {
       // Arrange
       const phoneNumber = '+1234567890';
-      twilioNotifier.send.mockResolvedValue(undefined);
+      const mockResult = { status: 'pending', message: 'OTP sent successfully to +1234567890' };
+      twilioNotifier.sendVerificationCode.mockResolvedValue(mockResult);
 
       // Act
       const result = await service.sendVerificationCode(phoneNumber);
 
       // Assert
-      expect(result.status).toBe('success');
-      expect(result.message).toContain('Verification code sent');
-      expect(eventEmitter.emitVerificationCodeSent).toHaveBeenCalled();
+      expect(result).toEqual(mockResult);
+      expect(twilioNotifier.sendVerificationCode).toHaveBeenCalledWith(phoneNumber);
+      expect(eventEmitter.emitVerificationCodeSent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          phoneNumber,
+          provider: 'Twilio',
+        }),
+      );
     });
 
     it('should handle verification code errors', async () => {
       // Arrange
       const phoneNumber = '+1234567890';
       const error = new Error('Verification code error');
-      twilioNotifier.send.mockRejectedValue(error);
+      twilioNotifier.sendVerificationCode.mockRejectedValue(error);
 
-      // Act
-      const result = await service.sendVerificationCode(phoneNumber);
-
-      // Assert
-      expect(result.status).toBe('error');
-      expect(result.message).toContain('Failed to send verification code');
+      // Act & Assert
+      await expect(service.sendVerificationCode(phoneNumber)).rejects.toThrow();
+      expect(eventEmitter.emitNotificationFailed).toHaveBeenCalled();
     });
   });
 
@@ -268,59 +289,86 @@ describe('NotificationService', () => {
       // Arrange
       const code = '123456';
       const phoneNumber = '+1234567890';
+      const mockResult = { success: true, message: 'The code is valid' };
+      twilioNotifier.checkVerificationCode.mockResolvedValue(mockResult);
 
       // Act
       const result = await service.checkVerificationCode(code, phoneNumber);
 
       // Assert
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('Verification code verified');
-      expect(eventEmitter.emitVerificationCodeVerified).toHaveBeenCalled();
+      expect(result).toEqual(mockResult);
+      expect(twilioNotifier.checkVerificationCode).toHaveBeenCalledWith(code, phoneNumber);
+      expect(eventEmitter.emitVerificationCodeVerified).toHaveBeenCalledWith(
+        expect.objectContaining({
+          phoneNumber,
+        }),
+      );
     });
 
     it('should handle invalid verification code', async () => {
       // Arrange
       const code = 'invalid';
       const phoneNumber = '+1234567890';
+      const mockResult = { success: false, message: 'Invalid or expired code' };
+      twilioNotifier.checkVerificationCode.mockResolvedValue(mockResult);
 
       // Act
       const result = await service.checkVerificationCode(code, phoneNumber);
 
       // Assert
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('Invalid verification code');
+      expect(result).toEqual(mockResult);
+      expect(twilioNotifier.checkVerificationCode).toHaveBeenCalledWith(code, phoneNumber);
+      expect(eventEmitter.emitVerificationCodeVerified).not.toHaveBeenCalled();
     });
   });
 
   describe('validation', () => {
-    it('should validate email format correctly', () => {
+    it('should validate email format correctly', async () => {
       const validEmails = ['test@example.com', 'user.name@domain.co.uk', 'user+tag@example.org'];
       const invalidEmails = ['invalid-email', '@example.com', 'test@', 'test.example.com'];
 
-      validEmails.forEach(email => {
+      // Test valid emails
+      for (const email of validEmails) {
         const dto = { ...mockCreateNotificationDto, email };
-        expect(() => service['validateNotificationData'](dto)).not.toThrow();
-      });
+        sendgridNotifier.send.mockResolvedValue(undefined);
+        await expect(service.send(dto)).resolves.not.toThrow();
+      }
 
-      invalidEmails.forEach(email => {
+      // Test invalid emails
+      for (const email of invalidEmails) {
         const dto = { ...mockCreateNotificationDto, email };
-        expect(() => service['validateNotificationData'](dto)).toThrow(NotificationValidationException);
-      });
+        await expect(service.send(dto)).rejects.toThrow(NotificationValidationException);
+      }
     });
 
-    it('should validate phone format correctly', () => {
+    it('should validate phone format correctly', async () => {
       const validPhones = ['+1234567890', '1234567890', '+5511999999999'];
       const invalidPhones = ['invalid-phone', '123', 'abc123', '+'];
 
-      validPhones.forEach(phone => {
+      // Test valid phones
+      for (const phone of validPhones) {
         const dto = { ...mockCreateNotificationDto, channel: NotificationChannelEnum.SMS, phone };
-        expect(() => service['validateNotificationData'](dto)).not.toThrow();
-      });
+        twilioNotifier.send.mockResolvedValue(undefined);
+        await expect(service.send(dto)).resolves.not.toThrow();
+      }
 
-      invalidPhones.forEach(phone => {
+      // Test invalid phones - these should throw validation errors
+      for (const phone of invalidPhones) {
         const dto = { ...mockCreateNotificationDto, channel: NotificationChannelEnum.SMS, phone };
-        expect(() => service['validateNotificationData'](dto)).toThrow(NotificationValidationException);
-      });
+        await expect(service.send(dto)).rejects.toThrow(NotificationValidationException);
+      }
+    });
+
+    it('should validate phone format specifically for SMS channel', async () => {
+      // Test that invalid phone numbers are rejected for SMS channel
+      const invalidPhone = 'invalid-phone';
+      const dto = {
+        ...mockCreateNotificationDto,
+        channel: NotificationChannelEnum.SMS,
+        phone: invalidPhone,
+      };
+
+      await expect(service.send(dto)).rejects.toThrow(NotificationValidationException);
     });
   });
 
@@ -340,4 +388,4 @@ describe('NotificationService', () => {
       expect(service['getProviderName']('UNKNOWN' as any)).toBe('Unknown');
     });
   });
-}); 
+});
