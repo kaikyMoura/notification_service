@@ -66,6 +66,17 @@ The NotificationService now implements a **complete system of events and listene
 - `POST /notification-listeners/metrics/reset` - Reset metrics
 - `GET /notification-listeners/event/:eventType` - Listeners by event
 
+### **Business Events**
+- `POST /business-events/custom` - Send custom business event
+- `POST /business-events/user/registered` - User registered business event
+- `POST /business-events/user/verified` - User verified business event
+- `POST /business-events/order/placed` - Order placed business event
+- `POST /business-events/order/shipped` - Order shipped business event
+- `POST /business-events/order/delivered` - Order delivered business event
+- `POST /business-events/payment/processed` - Payment processed business event
+- `POST /business-events/password/reset-requested` - Password reset requested business event
+- `POST /business-events/account/locked` - Account locked business event
+
 ## 📊 **Event Types**
 
 ### **1. notification.sent**
