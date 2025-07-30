@@ -1,0 +1,97 @@
+generator client {
+  provider        = "prisma-client-js"
+  output          = "app/generated/prisma/client"
+  previewFeatures = ["fullTextSearchPostgres", "views"]
+}
+
+datasource db {
+  provider = "postgres"
+  url      = env("DATABASE_URL")
+  schemas  = ["public", "audit"]
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  PUSH
+  IN_APP
+
+  @@schema("public")
+}
+
+enum NotificationType {
+  INFO
+  WARNING
+  ERROR
+  SUCCESS
+  ALERT
+
+  @@schema("public")
+}
+
+enum AuditAction {
+  INSERT
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+
+  @@schema("audit")
+}
+
+model AuditLog {
+  id        String  @id @default(uuid()) @db.Uuid
+  tableName String  @map("table_name") @db.VarChar(100)
+  recordId  String  @map("record_id") @db.VarChar(100)
+  oldValues Json?   @map("old_values") @db.JsonB
+  newValues Json?   @map("new_values") @db.JsonB
+  userId    String? @map("user_id") @db.Uuid
+  ipAddress String? @map("ip_address") @db.Inet
+  userAgent String? @map("user_agent") @db.Text
+
+  action AuditAction @map("action")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tableName], name: "idx_auditlog_table_name")
+  @@index([recordId], name: "idx_auditlog_record_id")
+  @@index([action], name: "idx_auditlog_action")
+  @@index([userId], name: "idx_auditlog_user_id")
+  @@index([createdAt], name: "idx_auditlog_created_at")
+  @@map("audit_logs")
+  @@schema("audit")
+}
+
+model Notification {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  title   String @db.VarChar(255)
+  message String @db.Text
+
+  channel     NotificationChannel @default(IN_APP)
+  type        NotificationType    @default(INFO)
+  isScheduled Boolean             @default(false) @map("is_scheduled")
+  scheduledAt DateTime?           @map("scheduled_at") @db.Timestamptz
+
+  isRead Boolean   @default(false) @map("is_read")
+  readAt DateTime? @map("read_at") @db.Timestamptz
+
+  sentAt DateTime? @map("sent_at") @db.Timestamptz
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz
+
+  @@index([userId], name: "idx_notification_user_id")
+  @@index([isRead], name: "idx_notification_is_read")
+  @@index([isScheduled], name: "idx_notification_is_scheduled")
+  @@index([scheduledAt], name: "idx_notification_scheduled_at")
+  @@index([createdAt], name: "idx_notification_created_at")
+  @@index([updatedAt], name: "idx_notification_updated_at")
+  @@index([deletedAt], name: "idx_notification_deleted_at")
+  @@index([type], name: "idx_notification_type")
+  @@index([channel], name: "idx_notification_channel")
+  @@map("notifications")
+  @@schema("public")
+}
